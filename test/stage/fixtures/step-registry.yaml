@@ -1,0 +1,251 @@
+schema_version: "3.0"
+registry_id: "bug-fix-adaptive-v3"
+
+workflow:
+  terminal_outcome: "patch_ready"
+  execution_mode: "FULL_AUTO" # DEFAULT | FULL_AUTO
+  input_policy: "VALIDATE_INPUTS" # VALIDATE_INPUTS | TRUST_INPUTS
+  preplan:
+    plan_creation_after: "issue-analysis"
+    forbid_downstream_execution: true
+  plan:
+    path: "{{project_root_dir}}/.bugfix/{{issue_number}}/workflow_plan.json"
+    initialize: "after_preplan"
+    reconcile_existing: true
+    incompatible_plan: "REBUILD"
+    states:
+      - "INITIALIZING"
+      - "READY"
+      - "RUNNING"
+      - "BLOCKED"
+      - "COMPLETED"
+    route_states:
+      - "SELECTED"
+      - "DEFERRED"
+    reason_codes:
+      - "ARTIFACT_REUSED"
+      - "PREPLAN_GENERATED"
+      - "TRUSTED_CANDIDATE"
+      - "VALIDATION_REQUIRED"
+      - "WAITING_FOR_REPRODUCTION"
+      - "WAITING_FOR_LOCALIZATION"
+      - "DERIVATION_READY"
+      - "NO_REUSABLE_INPUT"
+      - "FALLBACK_SELECTED"
+      - "EXECUTION_BLOCKED"
+  step_order:
+    - "project-understanding"
+    - "issue-analysis"
+    - "issue-reproduction"
+    - "root-cause-localization"
+    - "patch-generation"
+  dependency_policy: "all_earlier_steps_in_step_order"
+  route_precedence:
+    - "REUSE"
+    - "ACCEPT"
+    - "VERIFY"
+    - "DERIVE"
+    - "GENERATE"
+  candidate_sources:
+    - "issue-analysis.artifact"
+    - "invocation_input"
+  statuses:
+    - "PENDING"
+    - "RUNNING"
+    - "COMPLETED"
+    - "BLOCKED"
+  stop_on_blocked: true
+
+input_policies:
+  VALIDATE_INPUTS:
+    candidate_route: "VERIFY"
+    allow_skipped_validation_reuse: false
+  TRUST_INPUTS:
+    candidate_route: "ACCEPT"
+    allow_skipped_validation_reuse: true
+
+check_profiles:
+  project_document:
+    - "exists"
+    - "readable"
+    - "non_empty"
+    - "project_purpose_available"
+    - "high_level_structure_available"
+    - "build_command_available"
+    - "test_command_available"
+  canonical_json:
+    - "exists"
+    - "readable"
+    - "schema_valid"
+    - "issue_number_matches"
+  reproduction_result:
+    - "exists"
+    - "readable"
+    - "schema_valid"
+    - "issue_number_matches"
+    - "execution_evidence_referenced"
+    - "referenced_evidence_readable"
+  trusted_reproduction_result:
+    - "exists"
+    - "readable"
+    - "schema_valid"
+    - "issue_number_matches"
+    - "trusted_input_metadata_present"
+    - "reproduction_claim_present"
+    - "agent_execution_performed_is_false"
+  production_patch:
+    - "exists"
+    - "readable"
+    - "non_empty"
+    - "unified_diff_valid"
+    - "contains_production_code_change"
+    - "test_files_absent"
+    - "workflow_artifacts_absent"
+
+bootstrap:
+  skill: "initialize-bugfix-workspace"
+  mode: "single"
+  invoke: "exactly_once"
+  project_root: "{{workspace_root_dir}}"
+
+steps:
+  - id: "project-understanding"
+    artifact:
+      path: "{{project_root_dir}}/codebase-structure.md"
+      check_profile: "project_document"
+    generate:
+      sequence:
+        - skill: "codebase-structure"
+        - skill: "fix-build-command"
+
+  - id: "issue-analysis"
+    artifact:
+      path: "{{project_root_dir}}/.bugfix/{{issue_number}}/analysis_results.json"
+      schema: "owner_skill"
+      check_profile: "canonical_json"
+    generate:
+      sequence:
+        - skill: "issue-download"
+          when: "issue_description_absent"
+        - skill: "issue-analysis"
+
+  - id: "issue-reproduction"
+    artifact:
+      path: "{{project_root_dir}}/.bugfix/{{issue_number}}/reproduction/reproduction_result.json"
+      schema: "owner_skill"
+      check_profile: "reproduction_result"
+      skipped_validation_check_profile: "trusted_reproduction_result"
+    candidates:
+      - kind: "explicit_reproduction_path"
+        trustable: true
+        present_when: "the user explicitly identifies a readable path as a reproduction or test case"
+      - kind: "inline_reproduction_scenario"
+        trustable: true
+    accept:
+      mode: "record_trusted_reproduction"
+      candidate_set_policy: "all_complete_supplied_scenarios"
+      check_profile: "trusted_reproduction_result"
+    verify:
+      mode: "execute_supplied_reproduction"
+      candidate_set_policy: "all_complete_supplied_scenarios"
+      success_checks:
+        - "candidate_executed"
+        - "reported_behavior_observed"
+        - "execution_evidence_persisted"
+      canonicalize: true
+    generate:
+      skill: "issue-reproduction"
+    on_candidate_failure:
+      route: "GENERATE"
+    outcome_policy:
+      complete_when: "canonical_artifact_passes_active_policy_profile"
+      non_blocking_results:
+        - "NOT_REPRODUCED"
+        - "INCONCLUSIVE"
+      true_blocker: "canonical_artifact_cannot_be_written_or_validated"
+
+  - id: "root-cause-localization"
+    artifact:
+      path: "{{project_root_dir}}/.bugfix/{{issue_number}}/localization/root_cause_localization.json"
+      schema:
+        owner_skill: "static-root-cause-localization"
+        relative_path: "schema/root_cause_localization.schema.json"
+      check_profile: "canonical_json"
+    candidates:
+      - kind: "declared_root_cause"
+        trustable: true
+    accept:
+      mode: "canonicalize_trusted_user_root_cause"
+      schema_ref: "artifact.schema"
+      check_profile: "canonical_json"
+    verify:
+      mode: "validate_user_root_cause"
+      success_checks:
+        - "referenced_code_exists"
+        - "faulty_logic_consistent_with_code"
+        - "supporting_evidence_resolvable"
+      canonicalize: true
+      schema_ref: "artifact.schema"
+    derive:
+      mode: "canonicalize_reproduction_evidence"
+      source:
+        result: "issue-reproduction.artifact"
+        evidence: "paths_referenced_by_issue-reproduction.artifact"
+      gate:
+        - "the reproduction artifact comes from actual agent execution and its canonical result is REPRODUCED"
+        - "readable diagnostic evidence explicitly identifies the faulty file, faulty method or code region, runtime symptom, and faulty logic"
+      schema_ref: "artifact.schema"
+      check_profile: "canonical_json"
+    generate:
+      select_exactly_one: true
+      selector:
+        - skill: "static-root-cause-localization"
+          when: "frontend_related == true"
+        - skill: "dynamic-root-cause-localization"
+          when: "frontend_related != true and reproduction_result == REPRODUCED and agent_execution_performed == true"
+        - skill: "static-root-cause-localization"
+          when: "otherwise"
+      on_candidate_failure:
+        - route: "DERIVE"
+          when: "derive.gate_passes"
+        - route: "GENERATE"
+          when: "otherwise"
+    on_derive_failure:
+      route: "GENERATE"
+    confirmation:
+      required_in: "DEFAULT"
+      skipped_in: "FULL_AUTO"
+
+  - id: "patch-generation"
+    artifact:
+      path: "{{project_root_dir}}/.bugfix/{{issue_number}}/{{issue_number}}.patch"
+      check_profile: "production_patch"
+    patch_scope:
+      policy: "production_code_only"
+      exclude_context_paths:
+        - "reproduction_or_repair_paths_referenced_by_issue-analysis.artifact"
+        - "reproduction_or_repair_paths_from_invocation_input"
+        - "issue-reproduction.artifact.reproduction_test_path"
+        - "issue-reproduction.artifact.test_file_path"
+        - "issue-reproduction.artifact.brt_path"
+        - "issue-reproduction.artifact.run_cmd_path"
+        - "issue-reproduction.artifact.diagnostic_instrumentation_paths"
+      exclude_path_segments_case_insensitive:
+        - "test"
+        - "tests"
+        - "__tests__"
+        - "spec"
+        - "specs"
+      exclude_filename_globs:
+        - "test_*"
+        - "*_test.*"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*Test.*"
+        - "*Tests.*"
+        - "*Spec.*"
+        - "*Specs.*"
+      exclude_path_globs:
+        - "{{project_root_dir}}/.bugfix/**"
+    generate:
+      skill: "patch-generation"

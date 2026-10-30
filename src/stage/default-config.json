@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "pluginID": "bugfix-adaptive-stage-only-v1",
+  "targetAgent": "bug-fix-adaptive",
+  "stageControlTool": "bugfix-adaptive-stage",
+  "observationTool": "bugfix-adaptive-observation",
+  "stages": [
+    "project-understanding",
+    "issue-analysis",
+    "issue-reproduction",
+    "root-cause-localization",
+    "patch-generation"
+  ],
+  "includeIssueSourceByStage": [
+    "project-understanding",
+    "issue-analysis",
+    "issue-reproduction",
+    "root-cause-localization",
+    "patch-generation"
+  ],
+  "observationPolicy": {
+    "enabled": false,
+    "tools": ["read", "grep", "glob"],
+    "minOutputEstimatedTokensByTool": {"read": 800, "grep": 800, "glob": 1200},
+    "maxProjectedRatio": 0.65,
+    "minAbsoluteSavingsEstimatedTokens": 500,
+    "maxRequests": 2,
+    "protectBugfixPaths": true,
+    "protectSkillDirectories": true,
+    "allowModelRetainFull": true
+  },
+  "registryProjection": {
+    "workflowFields": ["input_policy", "input_policies"],
+    "stepFields": ["generate", "accept", "verify", "derive", "on_candidate_failure", "on_derive_failure", "confirmation", "artifact"]
+  },
+  "audit": {"includeMessages": false}
+}
