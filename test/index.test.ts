@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { TAIL, render } from "../src/index"
+import { RESUME, TAIL, render, server } from "../src/index"
 
 type Msg = { info: Record<string, any>; parts: Record<string, any>[] }
 
@@ -279,5 +279,37 @@ describe("after a compaction", () => {
     const shown = view(2)
     render(shown, {})
     expect(shown[3]!.parts[1]!.state.output).toStartWith("[turn 1]\n")
+  })
+})
+
+describe("a response with only the labels", () => {
+  const task: Msg = { info: { id: "u", role: "user", sessionID: "s", agent: "bug-fix-adaptive", model: { providerID: "p", modelID: "m" } }, parts: [{ type: "text", text: "task" }] }
+  const reply = (text: string, info = {}): Msg => ({ info: { id: "r", role: "assistant", sessionID: "s", ...info }, parts: [{ type: "text", text }] })
+  /** What the plugin sends when the session stops with these messages. */
+  async function stopped(msgs: Msg[], session: Record<string, any> = {}, options = {}) {
+    const sent: any[] = []
+    const client = { session: { get: async () => ({ data: { id: "s", ...session } }), messages: async () => ({ data: structuredClone(msgs) }), promptAsync: async (x: any) => void sent.push(x) } }
+    const hooks: any = await server({ directory: "/tmp", client } as any, { stage: false, log: false, ...options })
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "s" } } })
+    return sent
+  }
+
+  test("asks once more, with the same agent and model", async () => {
+    const sent = await stopped([task, step("a01", ""), reply("KEEP: -\nNOTE: need to check foo next.")])
+    expect(sent).toEqual([{ path: { id: "s" }, body: { agent: "bug-fix-adaptive", model: { providerID: "p", modelID: "m" }, parts: [{ type: "text", text: RESUME }] } }])
+  })
+
+  test("not when the response says more, calls a tool, or answers the question already asked", async () => {
+    expect(await stopped([task, reply("NOTE: all tests pass.\n\nDone. Changed foo.")])).toEqual([])
+    expect(await stopped([task, step("a01", "NOTE: reading foo")])).toEqual([])
+    expect(await stopped([task, reply("NOTE: x"), { ...task, parts: [{ type: "text", text: RESUME }] }, reply("NOTE: still x")])).toEqual([])
+  })
+
+  test("not after an error, in a subagent's session, or when the agent writes no labels", async () => {
+    const msgs = [task, reply("NOTE: x")]
+    expect(await stopped([task, reply("NOTE: x", { error: { name: "MessageAbortedError" } })])).toEqual([])
+    expect(await stopped(msgs, { parentID: "parent" })).toEqual([])
+    expect(await stopped(msgs, {}, { turns: "recent", summary: "rule" })).toEqual([])
+    expect(await stopped(msgs)).toHaveLength(1)
   })
 })

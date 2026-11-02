@@ -29,6 +29,8 @@ node install.mjs C:\你的项目 bug-fix-adaptive --replace
 
 发几条消息后，项目里的 `.opencode/context-manage.jsonl` 每次请求会多一行。
 
+模型只写了 `KEEP`/`NOTE` 就停下时，插件会在会话里发一条 `[context-manager]` 消息，请它继续或写总结，只发一次；日志里记一行 `"type":"resume"`。`opencode run` 里不会发（会话一停它就退出）。
+
 阶段层开着时，`.opencode/bugfix-adaptive-cache.jsonl` 每次请求也会多几行。这是缓存诊断：记下实际发出的请求里 system、tools 和各条消息的指纹，以及和上一个请求相比从第几条消息开始不同。它只记录，不改请求。要关掉，设环境变量 `OPENCODE_BUGFIX_ADAPTIVE_CACHE_DIAGNOSTICS=0` 后重启 OpenCode；选项 `log: false` 只关折叠日志。
 
 ## 选项

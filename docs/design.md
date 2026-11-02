@@ -41,6 +41,7 @@ KEEP: <the listed turns whose output you still need for the rest of the task, su
 - KEEP 行里既没有轮次号也不是 `-`（例如模型把 OpenCode 的截断提示抄进了 KEEP），当作没写。
 - 两个标签照写英文（"Write the labels KEEP and NOTE in English, as shown."）：GLM 有时写成"保留：… 注意：…"，插件认不出，那一次就当没写。
 - 提醒和提问都只在请求里，不存进会话。
+- **只写了标签就停下时续一次**（2026-11-02）：OpenCode 把没有工具调用的回复当作任务结束。模型有时只写了 KEEP/NOTE 就停了（评测 190 次自己结束的运行里 3 次：2 次没做完，1 次做完了），插件这时往会话里发一条 `[context-manager] Your last response had only the KEEP/NOTE lines and no tool call. If the task is finished, reply with a short summary of what you did; otherwise continue the task.`，沿用上一条用户消息的 agent 和模型。只续一次（再停就让它停）；回复里有别的正文、调了工具、出错（如按 Esc 中断）、子 agent 的会话、模型不写标签的组合，都不续。这是唯一存进会话的插件消息，日志记一行 `"type":"resume"`。`opencode run` 在会话停下时就退出，来不及续。
 - 以前的 `ask`（方案二：平时什么都不写，要收起时问一次 KEEP 和 NOTE）已并入默认方式。
 
 **只用其中一个**：`turns: "ask"` 而 `summary` 不是 `"note"` 时，只问 KEEP，说明和提问里都不提 NOTE；`summary: "note"` 而 `turns` 不是 `"ask"` 时，只要 NOTE，不加轮次标签、不问 KEEP。两个都不用时，模型什么都不写，也看不到任何说明。原来的选项 `keep` 在 2026-10-30 换成了这两个选项，`"none"` 对照组去掉。

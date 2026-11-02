@@ -27,6 +27,7 @@
 // kept and folded within that stage, and `start` counts from its beginning.
 // Option `cache` (default 0.1): the price of an input token read from the provider's cache, as a share of one that is not.
 // Option `log` (default .opencode/context-manage.jsonl in the project, or another path; false: no log).
+// A session that stops on a response with only the KEEP/NOTE lines is asked once more (see the `event` hook).
 // OpenCode 1.2 calls a plugin with its input only, so the options come from the entry file that loads this one.
 
 import { appendFileSync, mkdirSync } from "node:fs"
@@ -63,6 +64,10 @@ export function prompt(config: Config) {
 }
 
 export const TAIL = "[context-manager] Begin this response with the NOTE line, then continue the task."
+
+/** Sent once when a response has only the KEEP/NOTE lines and no tool call: OpenCode takes that as the end of the task. */
+export const RESUME = "[context-manager] Your last response had only the KEEP/NOTE lines and no tool call. If the task is finished, reply with a short summary of what you did; otherwise continue the task."
+const LABEL = /^\s*(?:KEEP|NOTE):/
 
 export const ask = (want: Step[], notes = true) =>
   `[context-manager] These turns are about to be let go: ${want.map((s) => `${s.index} ${did(s)}`).join(" · ")}. Begin this response with KEEP: <the ones you still need for the rest of the task, or ->${notes ? " and then the NOTE line" : ""}, then continue the task.`
@@ -323,6 +328,28 @@ export async function server(input: PluginInput, options: Options = {}): Promise
         log(session, { type: "request", ...render(msgs, modules, start, pinned, cache) })
       } catch (error) {
         log(session, { type: "error", message: String(error) })
+      }
+    },
+
+    // A session stopped on a response with only the KEEP/NOTE lines: ask once more, with the same agent and model.
+    // Not in a subagent's session (its caller has the response already), nor after an error such as the user
+    // stopping it. `opencode run` exits when the session stops, before this can ask.
+    event: async ({ event }) => {
+      if (!text || event.type !== "session.idle") return
+      const id = event.properties.sessionID
+      try {
+        if ((await input.client.session.get({ path: { id } })).data?.parentID) return
+        const msgs = ((await input.client.session.messages({ path: { id } })).data ?? []) as unknown as Msg[]
+        const last = msgs.at(-1)
+        const user = msgs.findLast((m) => m.info.role === "user")
+        if (last?.info.role !== "assistant" || last.info.error || !user || last.parts.some((p) => p.type === "tool")) return
+        const lines = last.parts.flatMap((p) => (p.type === "text" && !p.synthetic ? String(p.text ?? "").split("\n") : [])).filter((l) => l.trim())
+        if (!lines.length || !lines.every((l) => LABEL.test(l))) return
+        if (user.parts.some((p) => p.type === "text" && p.text === RESUME)) return
+        log(id, { type: "resume" })
+        await input.client.session.promptAsync({ path: { id }, body: { agent: user.info.agent, model: user.info.model, parts: [{ type: "text", text: RESUME }] } })
+      } catch (error) {
+        log(id, { type: "error", message: String(error) })
       }
     },
   }
